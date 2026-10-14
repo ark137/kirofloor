@@ -12,9 +12,16 @@ import numpy as np, cv2
 
 # ----------------------------------------------------------------------------- library
 class PlankLib:
-    def __init__(self, folder, plank_w):
+    def __init__(self, folder, plank_w, plank_len=None):
         files = sorted(glob.glob(f'{folder}/p*.png'), key=lambda s: int(s.rsplit('/p', 1)[1][:-4]))
         self.img = [cv2.imread(f) for f in files]
+        self.x_scale = 1.0
+        if plank_len:   # correct anisotropic scans: longest piece must have the real length/width ratio
+            r_px = max(im.shape[1] / im.shape[0] for im in self.img)
+            self.x_scale = (plank_len / plank_w) / r_px
+            if abs(self.x_scale - 1) > 0.02:
+                self.img = [cv2.resize(im, (round(im.shape[1] * self.x_scale), im.shape[0]),
+                                       interpolation=cv2.INTER_AREA) for im in self.img]
         self.plank_w = plank_w
         self.mpp = [plank_w / im.shape[0] for im in self.img]                  # metres / px per piece
         self.len = np.array([im.shape[1] * m for im, m in zip(self.img, self.mpp)])
