@@ -16,6 +16,7 @@ ap.add_argument('--dir', choices=['vp1', 'vp2'], default='vp1', help='plank leng
 ap.add_argument('--seed', type=int, default=7)
 ap.add_argument('--light_sigma', type=float, default=14, help='shading blur (px @4096)')
 ap.add_argument('--light_strength', type=float, default=1.0)
+ap.add_argument('--exposure_match', type=int, default=1, help='1 = lit floor matches scan lightness')
 a = ap.parse_args()
 rng = np.random.default_rng(a.seed)
 
@@ -128,7 +129,18 @@ shade = num / np.maximum(den, 1e-4)
 ref = np.median(shade[hard])
 S = (shade[ys, xs] / ref) ** a.light_strength
 lin = (col / 255) ** 2.2 * S[:, None]
-new = np.clip(lin ** (1 / 2.2) * 255, 0, 255)
+# exposure match: the floor (excluding contact shadows) gets the same median lightness as the scan;
+# shadows / window light stay relative to it. Only a neutral gain -> hue is untouched.
+def Lstar(bgr):
+    return cv2.cvtColor(np.clip(bgr, 0, 255).astype(np.uint8).reshape(-1, 1, 3), cv2.COLOR_BGR2LAB)[:, 0, 0].astype(np.float32)
+scanL = np.median(np.concatenate([Lstar(p.reshape(-1, 3)[::7]) for p in pieces]))
+lit = (S > 0.6) & (alpha[ys, xs] > 0.99)          # whole floor except contact shadows
+gain = 1.0
+for _ in range(4):
+    curL = np.median(Lstar((lin[lit][::5] * gain) ** (1 / 2.2) * 255))
+    gain *= (scanL / max(curL, 1)) ** 2.2 if a.exposure_match else 1
+print(f'exposure gain {gain:.3f}')
+new = np.clip((lin * gain) ** (1 / 2.2) * 255, 0, 255)
 
 out = scene.astype(np.float32)
 al = alpha[ys, xs][:, None]

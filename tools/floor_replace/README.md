@@ -6,14 +6,14 @@
 
 1. **透视**：从场景里的直线（窗框、沙发边）自动求灭点 → 还原相机焦距和地面平面。
 2. **地面遮罩**：GrabCut 自动分割，桌子/花盆/墙脚处用手工描点修正（`mask.py`）。
-3. **铺板**：把扫描件切成 8 块真实地板（`extract_planks.py` → `planks/`），按真实尺寸随机错缝铺设，相邻不重复，随机 180° 翻转。
-4. **光影**：从原图地面提取明暗（窗光、沙发接地阴影），乘到新地板上，原有阴影会保留。
+3. **铺板**：先按扫描件内嵌的 ICC 色彩配置（Concord_Rear_ICC）转换到 sRGB，保证颜色和 Photoshop 里看到的一致，再切成 8 块真实地板（`extract_planks.py` → `planks/`），按真实尺寸随机错缝铺设，相邻不重复，随机 180° 翻转。
+4. **光影**：从原图地面提取明暗（窗光、沙发接地阴影），乘到新地板上，原有阴影会保留。只取明暗，不取原图地面的颜色，所以色相不变；再自动校正曝光，让地板整体亮度和扫描件一致。
 5. 远处用 mipmap 采样防止摩尔纹，边缘羽化合成。
 
 ## 用法
 
 ```bash
-pip install opencv-python-headless numpy
+pip install opencv-python-headless numpy pillow
 python extract_planks.py          # 从扫描件切地板块
 python mask.py                    # 生成地面遮罩 mask4096.png
 python render.py --out a.png      # 地板平行于窗墙
@@ -28,7 +28,8 @@ python render.py --dir vp2 --out b.png   # 地板垂直于窗墙
 | `--cam_h` | 1.2 | 假设的相机高度（米），和 plank_w 一起决定比例 |
 | `--dir` | vp1 | 铺设方向：vp1 平行窗墙 / vp2 垂直窗墙 |
 | `--seed` | 7 | 换一个数字 = 换一种错缝排布 |
-| `--light_strength` | 1.0 | 原图光影强度，0 = 完全是扫描件原色 |
+| `--light_strength` | 1.0 | 原图光影强度，0 = 完全没有明暗变化（地板会显得假） |
+| `--exposure_match` | 1 | 1 = 地板整体亮度自动对齐扫描件 |
 
 ## 局限
 
