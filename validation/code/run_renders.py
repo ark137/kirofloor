@@ -22,6 +22,17 @@ def Hm(K, up, e1, e2, h):
     return K @ np.c_[e1, e2, -h * up]
 
 
+def auto_axes(n, floor_mask):
+    """Default laying direction = room's long axis: the wall direction along which the visible floor
+    extends further (3-97 percentile, metres). Returns (e1, e2, 'A'|'B'); planks run along e1."""
+    K, up, d1, d2, h = cam(n)
+    ys, xs = np.nonzero(floor_mask[::4, ::4]); P = np.c_[xs * 4, ys * 4, np.ones(len(xs))].T
+    Q = np.linalg.inv(Hm(K, up, d1, d2, h)) @ P; Q = Q[:2] / Q[2]
+    Q = Q[:, np.isfinite(Q).all(0) & (np.abs(Q).max(0) < 30)]
+    ext = np.subtract(*np.percentile(Q, [97, 3], axis=1))
+    return (d1, d2, 'A') if ext[0] >= ext[1] else (d2, -d1, 'B')
+
+
 if __name__ == '__main__':
     LIBS = {
         't1': PlankLib(f'{D}/lib/t1', 0.150, 1.212),  # GRIS CHAUD 150x1212 (scan is x-stretched, corrected)

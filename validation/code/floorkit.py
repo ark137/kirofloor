@@ -156,12 +156,54 @@ def guided_alpha(scene, mask, r=4, eps=2e-3):
     return np.clip(np.where(band > 0, q, p), 0, 1)
 
 
+def _nblur(x, w, s):
+    """normalized (masked) Gaussian blur -> extrapolates x from where w>0."""
+    if x.ndim == 3:
+        return np.stack([_nblur(x[..., c], w, s) for c in range(x.shape[2])], -1)
+    return cv2.GaussianBlur(x * w, (0, 0), s) / np.maximum(cv2.GaussianBlur(w, (0, 0), s), 1e-6)
+
+
+def known_bg_matte(scene, prob, r_in=4, r_out=8):
+    """Edge matting with a KNOWN background (the plain grey floor).
+    In a band around the floor edge: I = a*B + (1-a)*F, B = local old-floor colour, F = local object colour.
+    Returns alpha (floor coverage), B, sure-floor mask. Compositing I + a*(New-B) swaps the old floor's
+    contribution for the new one -> no grey halo, and blurred/semi-transparent edges keep the object part."""
+    core = prob > 0.5
+    k = lambda r: cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    sf = cv2.erode(core.astype(np.uint8), k(r_in)) > 0
+    sb = cv2.dilate(core.astype(np.uint8), k(r_out)) == 0
+    band = ~sf & ~sb
+    I = scene.astype(np.float32)
+    s = 1.5 * (r_in + r_out)
+    B = _nblur(I, sf.astype(np.float32), s)
+    F = _nblur(I, sb.astype(np.float32), s * 0.6)
+    d = B - F
+    a = ((I - F) * d).sum(-1) / ((d * d).sum(-1) + 1.0)
+    a = np.clip(a, 0, 1)
+    conf = np.clip((np.sqrt((d * d).sum(-1)) - 12) / 20, 0, 1)      # B and F distinguishable?
+    a_fb = np.clip((prob - 0.3) / 0.4, 0, 1)
+    a = conf * a + (1 - conf) * a_fb
+    alpha = np.where(sf, 1.0, np.where(band, a, 0.0)).astype(np.float32)
+    return alpha, B, sf
+
+
 def render(scene, floor_mask, Hm, lib, layout='straight', seed=0, light_sigma_frac=0.001,
            light_strength=1.0, light_color=0.0, seam=0.25, seam_w=0.0008, rotate_deg=0.0, refine_edges=True,
-           detail_thresh=0.08, coarse_frac=0.006, highlight_knee=0.7):
-    """scene: BGR uint8; floor_mask: bool HxW; Hm: floor(m)->image homography."""
+           detail_thresh=0.08, coarse_frac=0.006, highlight_knee=0.7, matte_alpha=None):
+    """scene: BGR uint8; floor_mask: bool HxW, or float prob HxW (0-1) -> known-background matting;
+    Hm: floor(m)->image homography."""
     Hs, Ws = floor_mask.shape
-    if refine_edges:
+    matte = None
+    if floor_mask.dtype != bool:
+        sc = Ws / 2048
+        alpha, Bold, sure = known_bg_matte(scene, floor_mask, max(2, round(4 * sc)), max(3, round(8 * sc)))
+        if matte_alpha is not None:      # alpha from a matting model (ViTMatte); B still from the sure floor
+            sure = matte_alpha > 0.999
+            Bold = _nblur(scene.astype(np.float32), sure.astype(np.float32), 18 * sc)
+            alpha = matte_alpha.astype(np.float32)
+        matte = (Bold, sure)
+        floor_mask = floor_mask > 0.5
+    elif refine_edges:
         alpha = guided_alpha(scene, floor_mask, r=max(2, Ws // 512))
         alpha = np.clip((alpha - 0.15) / 0.7, 0, 1)
     else:
@@ -237,5 +279,10 @@ def render(scene, floor_mask, Hm, lib, layout='straight', seed=0, light_sigma_fr
     new = np.clip(lin ** (1 / 2.2) * 255, 0, 255)
     out = scene.astype(np.float32)
     a = alpha[ys, xs][:, None]
-    out[ys, xs] = out[ys, xs] * (1 - a) + new * a
+    if matte is None:
+        out[ys, xs] = out[ys, xs] * (1 - a) + new * a
+    else:
+        Bold, sure = matte
+        s = sure[ys, xs][:, None]
+        out[ys, xs] = np.where(s, new, out[ys, xs] + a * (new - Bold[ys, xs]))
     return np.clip(out, 0, 255).astype(np.uint8)
